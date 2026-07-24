@@ -1,0 +1,19 @@
+{
+  "name": "planning-reservations",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Application autonome de reservation de creneaux (Lundi-Samedi, 10h-13h et 18h-21h, 4 places max par creneau)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "express": "^4.19.2",
+    "express-rate-limit": "^8.6.0",
+    "helmet": "^8.3.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
