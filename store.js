@@ -11,7 +11,7 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 function loadDB() {
   if (!fs.existsSync(DB_FILE)) {
-    return { names: {}, reservations: {}, config: {}, auditLog: [] };
+    return { names: {}, reservations: {}, config: {}, auditLog: [], pushSubscriptions: [] };
   }
   try {
     const parsed = JSON.parse(fs.readFileSync(DB_FILE, "utf8"));
@@ -20,9 +20,10 @@ function loadDB() {
       reservations: parsed.reservations || {},
       config: parsed.config || {},
       auditLog: parsed.auditLog || [],
+      pushSubscriptions: parsed.pushSubscriptions || [],
     };
   } catch {
-    return { names: {}, reservations: {}, config: {}, auditLog: [] };
+    return { names: {}, reservations: {}, config: {}, auditLog: [], pushSubscriptions: [] };
   }
 }
 
