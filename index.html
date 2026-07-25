@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<title>Toutii-Coaching Studio Premium — Planning</title>
+<link rel="manifest" href="/manifest.json" />
+<link rel="icon" href="/icon-192.png" />
+<link rel="apple-touch-icon" href="/icon-192.png" />
+<meta name="theme-color" content="#0C0C0B" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Toutii-Coaching" />
+<link rel="stylesheet" href="/style.css" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+</head>
+<body>
+
+<!-- Access gate: a personal code both authenticates and identifies who is connecting -->
+<div id="accessGate" class="access-gate">
+  <div class="access-card">
+    <img src="/logo-avatar.jpg" alt="Toutii-Coaching Studio Premium" class="access-logo" />
+    <h2>Toutii-Coaching</h2>
+    <p class="access-sub">Entrez votre code personnel transmis par votre coach pour consulter le planning.</p>
+    <div class="pin-boxes" id="pinBoxes">
+      <input class="pin-box" type="password" maxlength="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off" data-index="0" />
+      <input class="pin-box" type="password" maxlength="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off" data-index="1" />
+      <input class="pin-box" type="password" maxlength="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off" data-index="2" />
+      <input class="pin-box" type="password" maxlength="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off" data-index="3" />
+      <input class="pin-box" type="password" maxlength="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off" data-index="4" />
+      <input class="pin-box" type="password" maxlength="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off" data-index="5" />
+    </div>
+    <p id="accessError" class="access-error" hidden></p>
+    <button id="adminToggleBtnGate" class="link-btn access-admin-link">⚙ Accès administrateur</button>
+  </div>
+</div>
+
+<!-- Admin modal: lives outside appRoot so it's reachable even before a personal code is entered -->
+<div id="adminModal" class="modal-overlay" hidden>
+  <div class="modal">
+    <div class="modal-header">
+      <h2><span id="adminLockIcon">🔒</span> Administration</h2>
+      <button id="closeAdminBtn" class="icon-btn" aria-label="Fermer">✕</button>
+    </div>
+
+    <div id="adminLoginPane" class="modal-body">
+      <p>Entrez le mot de passe administrateur pour gérer la liste des personnes et les réservations.</p>
+      <div class="input-row">
+        <input id="adminPasswordInput" type="password" placeholder="Mot de passe" />
+        <button id="adminLoginBtn" class="btn btn-dark">Entrer</button>
+      </div>
+      <p class="muted small">Mot de passe par défaut : admin1234 (à changer une fois connecté).</p>
+    </div>
+
+    <div id="adminPanelPane" class="modal-body" hidden>
+      <div class="admin-tabs">
+        <button id="tabPeopleBtn" class="admin-tab-btn active">👥 Personnes</button>
+        <button id="tabSettingsBtn" class="admin-tab-btn">⚙ Réglages</button>
+      </div>
+
+      <div id="tabPeople" class="admin-tab-content">
+        <section>
+          <h3>Personnes enregistrées (<span id="namesCount">0</span>)</h3>
+          <p class="muted small" style="margin:0 0 10px;">Chaque personne reçoit un code personnel à 6 chiffres et un nombre de séances autorisées par semaine (modifiable à tout moment). Transmettez le code en privé (SMS, message) — c'est ce qui l'identifie sur le planning.</p>
+          <div class="input-row">
+            <input id="newNameInput" type="text" placeholder="Nom et prénom" />
+            <input id="newQuotaInput" type="number" min="2" max="4" value="4" title="Séances par semaine" class="quota-input" />
+            <button id="addNameBtn" class="btn btn-green">+ Ajouter</button>
+          </div>
+          <div id="newCodeReveal" class="code-reveal" hidden></div>
+          <div id="namesList" class="names-list"></div>
+        </section>
+      </div>
+
+      <div id="tabSettings" class="admin-tab-content" hidden>
+        <section>
+          <h3>Mot de passe administrateur</h3>
+          <div class="input-row">
+            <input id="newPasswordInput" type="password" placeholder="Nouveau mot de passe" />
+            <button id="changePasswordBtn" class="btn btn-dark">Changer</button>
+          </div>
+        </section>
+
+        <section>
+          <h3>Sauvegarde</h3>
+          <p class="muted small" style="margin:0 0 10px;">Téléchargez une copie complète de vos données (personnes, réservations, réglages) — à garder de côté au cas où. Ce fichier peut être renvoyé à votre développeur pour restaurer les données si besoin. <strong>Gardez-le privé</strong> : il contient des clés techniques internes à l'application (pas de mots de passe en clair, mais à ne pas partager publiquement.)</p>
+          <button id="exportDataBtn" class="btn btn-dark">💾 Exporter les données</button>
+        </section>
+
+        <section>
+          <h3>Notifications</h3>
+          <p class="muted small" style="margin:0 0 10px;">Recevez une alerte sur cet appareil dès qu'un coaché réserve ou annule un créneau — même app fermée. Sur iPhone, l'app doit d'abord être ajoutée à l'écran d'accueil (iOS 16.4+ requis).</p>
+          <button id="pushToggleBtn" class="btn btn-dark">🔔 Activer les notifications</button>
+          <p id="pushStatus" class="muted small" style="margin-top:8px;"></p>
+        </section>
+
+        <section>
+          <h3>Gestion des créneaux</h3>
+          <p class="muted small">En vous connectant en administrateur, vous accédez directement à la grille du planning : chaque créneau y affiche un sélecteur pour ajouter quelqu'un (même au-delà de 4 personnes ou de son quota si nécessaire) et un bouton pour retirer n'importe qui.</p>
+        </section>
+
+        <section>
+          <h3>Journal d'activité</h3>
+          <p class="muted small" style="margin:0 0 10px;">Trace de toutes les actions administrateur (ajouts, suppressions, modifications, connexions) — utile pour repérer une action que vous n'auriez pas faite vous-même.</p>
+          <div id="auditLogList" class="audit-log-list"></div>
+        </section>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="appRoot" hidden>
+
+<div id="toast" class="toast" hidden></div>
+
+
+<header class="app-header">
+  <div class="header-inner">
+    <div class="brand">
+      <img src="/logo-avatar.jpg" alt="Toutii-Coaching Studio Premium" class="logo" />
+      <div>
+        <h1>Toutii-Coaching · Studio Premium</h1>
+        <div class="planning-label">Planning des créneaux</div>
+        <p class="subtitle">4 places maximum par créneau d'1h</p>
+      </div>
+    </div>
+    <button id="adminToggleBtn" class="btn btn-outline">⚙ Administration</button>
+  </div>
+</header>
+
+<main class="app-main">
+  <div class="toolbar">
+    <div class="week-nav">
+      <button id="prevWeekBtn" class="icon-btn" aria-label="Semaine précédente">‹</button>
+      <div class="week-label">
+        <div id="weekKeyLabel" class="mono small"></div>
+        <div id="weekRangeLabel" class="week-range"></div>
+      </div>
+      <button id="nextWeekBtn" class="icon-btn" aria-label="Semaine suivante">›</button>
+    </div>
+    <div id="totalBookings" class="mono small muted"></div>
+  </div>
+  <div class="subtoolbar">
+    <button id="todayBtn" class="link-btn" hidden>Revenir à cette semaine</button>
+    <div class="connected-as">
+      <span class="mono small muted">Connecté :</span>
+      <span id="connectedName"></span>
+      <span id="myQuota" class="mono small muted"></span>
+      <button id="logoutBtn" class="link-btn" title="Changer de code">se déconnecter</button>
+    </div>
+  </div>
+
+  <div id="errorBox" class="error-box" hidden></div>
+  <div id="lockBanner" class="lock-banner" hidden></div>
+  <div id="augustBanner" class="lock-banner" hidden></div>
+  <div id="quotaBanner" class="lock-banner" hidden></div>
+  <div id="loadingBox" class="loading-box">Chargement du planning…</div>
+
+  <div id="gridWrap" class="grid-wrap" hidden></div>
+</main>
+
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
