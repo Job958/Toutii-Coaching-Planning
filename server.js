@@ -4,7 +4,57 @@ const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
+const webpush = require("web-push");
 const { db, save } = require("./store");
+
+// ---------- Push notifications: alert the admin (coach) when a coached
+// person books or cancels, even if the app isn't open. Uses standard Web
+// Push (VAPID) — no third-party account or per-message cost, unlike SMS. ----------
+
+if (!db.config.vapid_public_key || !db.config.vapid_private_key) {
+  const keys = webpush.generateVAPIDKeys();
+  db.config.vapid_public_key = keys.publicKey;
+  db.config.vapid_private_key = keys.privateKey;
+  save();
+}
+webpush.setVapidDetails(
+  "mailto:contact@toutii-coaching.example",
+  db.config.vapid_public_key,
+  db.config.vapid_private_key
+);
+if (!db.pushSubscriptions) {
+  db.pushSubscriptions = [];
+  save();
+}
+
+function notifyAdmins(title, body) {
+  if (!db.pushSubscriptions || db.pushSubscriptions.length === 0) return;
+  const payload = JSON.stringify({ title, body });
+  const deadEndpoints = [];
+  Promise.all(
+    db.pushSubscriptions.map((sub) =>
+      webpush.sendNotification(sub, payload).catch((err) => {
+        // 410/404 = the browser subscription is dead (uninstalled, expired) — drop it.
+        if (err.statusCode === 410 || err.statusCode === 404) {
+          deadEndpoints.push(sub.endpoint);
+        }
+        // other errors (e.g. transient network issues) are left alone, not removed
+      })
+    )
+  ).then(() => {
+    if (deadEndpoints.length > 0) {
+      db.pushSubscriptions = db.pushSubscriptions.filter((s) => !deadEndpoints.includes(s.endpoint));
+      save();
+    }
+  });
+}
+
+// If someone cancels and then immediately books a different slot, that's really
+// a reschedule, not a plain cancellation — hold the cancellation notice briefly
+// so it can be merged into a single clear "moved from X to Y" message instead
+// of alarming the admin with a slot that's actually just being relocated.
+const RESCHEDULE_WINDOW_MS = 3 * 60 * 1000;
+const pendingCancellations = new Map(); // person name -> { day, hour, timer }
 
 // ---------- Admin password: stored as a bcrypt hash, never in plain text ----------
 
@@ -114,6 +164,12 @@ function getQuota(name) {
   const p = db.names[name];
   if (!p) return DEFAULT_QUOTA;
   return Number.isInteger(p.quota) ? p.quota : DEFAULT_QUOTA;
+}
+
+function getTokens(name) {
+  const p = db.names[name];
+  if (!p) return 0;
+  return Number.isInteger(p.tokens) ? p.tokens : 0;
 }
 
 // Total reservations a person already holds across the whole week, regardless of slot.
@@ -254,8 +310,12 @@ const accessLimiter = rateLimit({
   message: { error: "Trop de tentatives. Réessayez dans quelques minutes." },
 });
 
+app.get("/api/push/vapid-public-key", (req, res) => {
+  res.json({ publicKey: db.config.vapid_public_key });
+});
+
 app.post("/api/access/verify", accessLimiter, checkAccess, (req, res) => {
-  res.json({ ok: true, name: req.personName, quota: getQuota(req.personName) });
+  res.json({ ok: true, name: req.personName, quota: getQuota(req.personName), tokens: getTokens(req.personName) });
 });
 
 // ---------- Public routes (require a valid personal code) ----------
@@ -285,17 +345,37 @@ app.post("/api/book", checkAccess, (req, res) => {
 
   const quota = getQuota(name);
   const used = weeklyUsage(weekKey, name);
+  let usedToken = false;
   if (used >= quota) {
-    return res.status(403).json({
-      error: `Vous avez atteint votre nombre de séances pour cette semaine (${quota}). Seul l'administrateur peut ajouter une séance supplémentaire.`,
-    });
+    const tokens = getTokens(name);
+    if (tokens <= 0) {
+      return res.status(403).json({
+        error: `Vous avez atteint votre nombre de séances pour cette semaine (${quota}) et n'avez aucun jeton de rattrapage disponible. Seul l'administrateur peut ajouter une séance supplémentaire.`,
+      });
+    }
+    usedToken = true;
   }
   if (slot.length >= MAX_PER_SLOT) {
     return res.status(409).json({ error: "Ce créneau est complet (4/4). Choisissez un autre horaire." });
   }
   db.reservations[weekKey][key] = [...slot, name];
+  if (usedToken) {
+    db.names[name].tokens = Math.max(0, getTokens(name) - 1);
+    logAction(`« ${name} » a utilisé un jeton de rattrapage — ${weekKey}, ${DAY_LABELS[day]} ${hour}h`);
+  }
   save();
-  res.json({ ok: true });
+
+  const pending = pendingCancellations.get(name);
+  if (pending) {
+    clearTimeout(pending.timer);
+    pendingCancellations.delete(name);
+    notifyAdmins(
+      "Créneau déplacé",
+      `${name} a déplacé sa séance du ${DAY_LABELS[pending.day]} ${pending.hour}h vers le ${DAY_LABELS[day]} ${hour}h`
+    );
+  }
+
+  res.json({ ok: true, usedToken, tokensRemaining: getTokens(name) });
 });
 
 app.post("/api/cancel", checkAccess, (req, res) => {
@@ -306,8 +386,16 @@ app.post("/api/cancel", checkAccess, (req, res) => {
   }
   const key = slotKey(day, hour);
   if (db.reservations[weekKey] && db.reservations[weekKey][key]) {
+    const wasBooked = db.reservations[weekKey][key].includes(name);
     db.reservations[weekKey][key] = db.reservations[weekKey][key].filter((n) => n !== name);
     save();
+    if (wasBooked) {
+      const timer = setTimeout(() => {
+        pendingCancellations.delete(name);
+        notifyAdmins("Annulation de créneau", `${name} a annulé sa séance du ${DAY_LABELS[day]} de ${hour}h à ${hour + 1}h`);
+      }, RESCHEDULE_WINDOW_MS);
+      pendingCancellations.set(name, { day, hour, timer });
+    }
   }
   res.json({ ok: true });
 });
@@ -321,6 +409,25 @@ app.post("/api/admin/login", (req, res) => {
   res.json({ ok: true });
 });
 
+app.post("/api/admin/push/subscribe", checkAdmin, (req, res) => {
+  const { subscription } = req.body || {};
+  if (!subscription || typeof subscription.endpoint !== "string") {
+    return res.status(400).json({ error: "Abonnement invalide." });
+  }
+  if (!db.pushSubscriptions.some((s) => s.endpoint === subscription.endpoint)) {
+    db.pushSubscriptions.push(subscription);
+    save();
+  }
+  res.json({ ok: true });
+});
+
+app.post("/api/admin/push/unsubscribe", checkAdmin, (req, res) => {
+  const { endpoint } = req.body || {};
+  db.pushSubscriptions = db.pushSubscriptions.filter((s) => s.endpoint !== endpoint);
+  save();
+  res.json({ ok: true });
+});
+
 app.post("/api/admin/week", checkAdmin, (req, res) => {
   const { weekKey } = req.body || {};
   if (!WEEK_KEY_RE.test(weekKey)) return res.status(400).json({ error: "Semaine invalide." });
@@ -330,8 +437,20 @@ app.post("/api/admin/week", checkAdmin, (req, res) => {
 app.post("/api/admin/names/list", checkAdmin, (req, res) => {
   const list = Object.keys(db.names)
     .sort((a, b) => a.localeCompare(b, "fr"))
-    .map((name) => ({ name, quota: getQuota(name) }));
+    .map((name) => ({ name, quota: getQuota(name), tokens: getTokens(name) }));
   res.json(list);
+});
+
+app.post("/api/admin/names/set-tokens", checkAdmin, (req, res) => {
+  const name = cleanName(req.body && req.body.name);
+  if (!name || !db.names[name]) return res.status(404).json({ error: "Personne introuvable." });
+  const delta = Number(req.body && req.body.delta);
+  if (!Number.isInteger(delta)) return res.status(400).json({ error: "Valeur invalide." });
+  const next = Math.max(0, getTokens(name) + delta);
+  db.names[name].tokens = next;
+  save();
+  logAction(`Jetons de rattrapage de « ${name} » ajustés (${delta > 0 ? "+" : ""}${delta}) → ${next}`);
+  res.json({ ok: true, tokens: next });
 });
 
 app.post("/api/admin/audit-log", checkAdmin, (req, res) => {
@@ -417,16 +536,26 @@ app.post("/api/admin/book", checkAdmin, (req, res) => {
 });
 
 app.post("/api/admin/cancel", checkAdmin, (req, res) => {
-  const { weekKey, day, hour } = req.body || {};
+  const { weekKey, day, hour, grantToken } = req.body || {};
   const name = cleanName(req.body && req.body.name);
   if (!validSlotParams(weekKey, day, hour) || !name) {
     return res.status(400).json({ error: "Requête invalide." });
   }
   const key = slotKey(day, hour);
   if (db.reservations[weekKey] && db.reservations[weekKey][key]) {
+    const wasBooked = db.reservations[weekKey][key].includes(name);
     db.reservations[weekKey][key] = db.reservations[weekKey][key].filter((n) => n !== name);
+    // Admin cancelling someone's already-made reservation is, in practice, almost
+    // always the coach being unavailable for that slot — so a makeup token is
+    // granted by default. Pass grantToken:false explicitly to skip it (e.g. when
+    // just correcting a mistake rather than a real cancellation).
+    if (wasBooked && grantToken !== false && db.names[name]) {
+      db.names[name].tokens = getTokens(name) + 1;
+      logAction(`Annulation forcée pour « ${name} » — ${weekKey}, ${DAY_LABELS[day]} ${hour}h (jeton de rattrapage attribué)`);
+    } else {
+      logAction(`Annulation forcée pour « ${name} » — ${weekKey}, ${DAY_LABELS[day]} ${hour}h`);
+    }
     save();
-    logAction(`Annulation forcée pour « ${name} » — ${weekKey}, ${DAY_LABELS[day]} ${hour}h`);
   }
   res.json({ ok: true });
 });
