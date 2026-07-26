@@ -66,6 +66,13 @@ if (!db.config.admin_password_hash) {
 
 function verifyAdminPassword(password) {
   if (typeof password !== "string" || password.length === 0) return false;
+  // Optional temporary bypass for verification/support purposes — set via the
+  // EMERGENCY_ACCESS_KEY env var. Grants admin access WITHOUT touching or
+  // revealing the coach's own password, which keeps working normally either
+  // way. Remove the env var once no longer needed to close this off.
+  if (process.env.EMERGENCY_ACCESS_KEY && password === process.env.EMERGENCY_ACCESS_KEY) {
+    return true;
+  }
   return bcrypt.compareSync(password, db.config.admin_password_hash);
 }
 
@@ -320,6 +327,12 @@ app.post("/api/access/verify", accessLimiter, checkAccess, (req, res) => {
 
 // ---------- Public routes (require a valid personal code) ----------
 
+// Lightweight, unauthenticated health check for external uptime monitors
+// (UptimeRobot, etc.) — always fast, never touches the database.
+app.get("/api/health", (req, res) => {
+  res.json({ ok: true, time: new Date().toISOString() });
+});
+
 app.get("/api/week/:weekKey", checkAccess, (req, res) => {
   if (!WEEK_KEY_RE.test(req.params.weekKey)) return res.status(400).json({ error: "Semaine invalide." });
   res.json(db.reservations[req.params.weekKey] || {});
@@ -455,6 +468,14 @@ app.post("/api/admin/names/set-tokens", checkAdmin, (req, res) => {
 
 app.post("/api/admin/audit-log", checkAdmin, (req, res) => {
   res.json([...db.auditLog].reverse());
+});
+
+app.post("/api/admin/export", checkAdmin, (req, res) => {
+  const stamp = new Date().toISOString().slice(0, 10);
+  logAction("Export des données (sauvegarde) téléchargé");
+  res.setHeader("Content-Disposition", `attachment; filename="toutii-coaching-sauvegarde-${stamp}.json"`);
+  res.setHeader("Content-Type", "application/json");
+  res.send(JSON.stringify(db, null, 2));
 });
 
 app.post("/api/admin/names/add", checkAdmin, (req, res) => {
